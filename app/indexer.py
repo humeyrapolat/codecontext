@@ -1,183 +1,186 @@
 import os
-import git
+from dataclasses import dataclass
 from pathlib import Path
-from langchain_core.documents import Document
-from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings
+
+import git
 from dotenv import load_dotenv
+from langchain_community.vectorstores import FAISS
+from langchain_core.documents import Document
 
 load_dotenv()
 
-# Desteklenen kod uzantıları ve dilleri
-# Neden bu liste? Agent sadece kod dosyalarına bakmalı
-# README, resim, lock dosyaları indexlememeli — gürültü olur
 SUPPORTED_EXTENSIONS = {
-    ".py": Language.PYTHON,
-    ".js": Language.JS,
-    ".ts": Language.JS,
-    ".java": Language.JAVA,
-    ".kt": Language.KOTLIN,
-    ".md": None,  # Markdown düz metin olarak işle
+    ".py": "python",
+    ".js": "js",
+    ".ts": "js",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".md": None,
 }
 
-# Embedding modeli — LearnFlow'dan tanıdık
-# Bir kere yükle, hep kullan — her istekte yeniden yükleme = yavaş
-embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+IGNORED_PATH_PARTS = {"node_modules", "__pycache__", ".venv"}
+MAX_FILE_SIZE_CHARS = 100_000
+
+_embeddings = None
 
 
-def clone_repo(repo_url: str, target_dir: str = "indexed_repo") -> str:
-    """
-    GitHub reposunu local'e indir.
-    
-    Neden clone? Repoyu dosya dosya okumak için local'de olması lazım.
-    git.Repo.clone_from() → GitPython kütüphanesi, git komutlarını Python'dan çalıştırır.
-    """
-    # Zaten indirilmişse tekrar indirme — hem yavaş hem gereksiz
-    if os.path.exists(target_dir):
-        print(f"✅ Repo zaten mevcut: {target_dir}")
-        return target_dir
-    
-    print(f"📥 Repo indiriliyor: {repo_url}")
-    git.Repo.clone_from(repo_url, target_dir)
-    print(f"✅ Repo indirildi: {target_dir}")
-    return target_dir
+@dataclass
+class IndexResult:
+    vectorstore: FAISS
+    repo_path: Path
+    index_path: Path
+    documents_count: int
+    chunks_count: int
 
 
-def load_code_files(repo_dir: str) -> list[Document]:
-    """
-    Repo içindeki kod dosyalarını oku, Document objelerine çevir.
-    
-    Neden Document? LangChain'in standart formatı.
-    İçinde page_content (kod) ve metadata (dosya yolu, dil) var.
-    Metadata önemli — agent "bu kod hangi dosyadan?" diye sorabilir.
-    """
+def get_embeddings():
+    """Load the embedding model lazily to keep API startup lightweight."""
+    global _embeddings
+
+    if _embeddings is None:
+        from langchain_huggingface import HuggingFaceEmbeddings
+
+        _embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+
+    return _embeddings
+
+
+def build_text_splitter(language: str | None):
+    """Create a language-aware splitter only when indexing is needed."""
+    from langchain_text_splitters import Language, RecursiveCharacterTextSplitter
+
+    if language is None:
+        return RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=100,
+        )
+
+    language_map = {
+        "python": Language.PYTHON,
+        "js": Language.JS,
+        "java": Language.JAVA,
+        "kotlin": Language.KOTLIN,
+    }
+
+    return RecursiveCharacterTextSplitter.from_language(
+        language=language_map[language],
+        chunk_size=1000,
+        chunk_overlap=100,
+    )
+
+
+def clone_repo(repo_url: str, target_dir: str | Path = "indexed_repo") -> Path:
+    """Clone a public GitHub repository into the target directory."""
+    target_path = Path(target_dir)
+
+    if target_path.exists():
+        print(f"Repository already exists: {target_path}")
+        return target_path
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    git.Repo.clone_from(repo_url, target_path)
+
+    return target_path
+
+
+def should_skip_file(file_path: Path) -> bool:
+    if file_path.suffix not in SUPPORTED_EXTENSIONS:
+        return True
+
+    return any(
+        part.startswith(".") or part in IGNORED_PATH_PARTS
+        for part in file_path.parts
+    )
+
+
+def load_code_files(repo_dir: str | Path) -> list[Document]:
+    """Load supported source and Markdown files into LangChain documents."""
     documents = []
     repo_path = Path(repo_dir)
-    
-    for file_path in repo_path.rglob("*"):  # tüm dosyaları recursive tara
-        
-        # Sadece desteklenen uzantıları al
-        if file_path.suffix not in SUPPORTED_EXTENSIONS:
+
+    for file_path in repo_path.rglob("*"):
+        if should_skip_file(file_path):
             continue
-            
-        # Gizli klasörleri atla (.git, .venv, node_modules vs.)
-        # Neden? .git klasöründe binary dosyalar var, okunmaz
-        # node_modules'da binlerce dosya var, gürültü olur
-        if any(part.startswith(".") or part in ["node_modules", "__pycache__", ".venv"] 
-               for part in file_path.parts):
-            continue
-        
+
         try:
             content = file_path.read_text(encoding="utf-8", errors="ignore")
-            
-            # Boş dosyaları atla — indexlemenin anlamı yok
-            if not content.strip():
-                continue
-                
-            # Çok büyük dosyaları atla (100KB+) — genellikle generated code
-            if len(content) > 100_000:
-                continue
-            
-            documents.append(Document(
+        except OSError as exc:
+            print(f"Could not read file {file_path}: {exc}")
+            continue
+
+        if not content.strip():
+            continue
+
+        if len(content) > MAX_FILE_SIZE_CHARS:
+            continue
+
+        documents.append(
+            Document(
                 page_content=content,
                 metadata={
                     "source": str(file_path),
                     "language": SUPPORTED_EXTENSIONS[file_path.suffix],
                     "filename": file_path.name,
-                    # Relative path — repo içindeki konumu
-                    "relative_path": str(file_path.relative_to(repo_path))
-                }
-            ))
-            
-        except Exception as e:
-            print(f"⚠️ Dosya okunamadı: {file_path} — {e}")
-            continue
-    
-    print(f"📄 Toplam {len(documents)} kod dosyası okundu")
+                    "relative_path": str(file_path.relative_to(repo_path)),
+                },
+            )
+        )
+
     return documents
 
 
 def chunk_code(documents: list[Document]) -> list[Document]:
-    """
-    Kod dosyalarını akıllıca böl.
-    
-    Neden RecursiveCharacterTextSplitter(Language.PYTHON)?
-    Bu splitter Python syntax'ını anlıyor:
-    - Önce class sınırlarında bölmeye çalışır
-    - Sonra fonksiyon sınırlarında
-    - Sonra satır sınırlarında
-    - En son karakter sınırında
-    
-    Yani fonksiyon ortasında kesmekten kaçınıyor — çok önemli!
-    """
+    """Split source documents into retrieval-friendly chunks."""
     all_chunks = []
-    
-    for doc in documents:
-        language = doc.metadata.get("language")
-        
-        if language is not None:
-            # Dile özel splitter — syntax'ı anlıyor
-            splitter = RecursiveCharacterTextSplitter.from_language(
-                language=language,
-                chunk_size=1000,   # Kod için 1000 karakter — PDF'den büyük
-                chunk_overlap=100  # Fonksiyonlar arası bağlam için
-            )
-        else:
-            # Markdown için düz splitter
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size=1000,
-                chunk_overlap=100
-            )
-        
-        chunks = splitter.split_documents([doc])
-        
-        # Her chunk'a kaynak dosya bilgisini koru
-        # Splitter metadata'yı taşıyor ama emin olmak için
+
+    for document in documents:
+        language = document.metadata.get("language")
+        splitter = build_text_splitter(language)
+        chunks = splitter.split_documents([document])
+
         for chunk in chunks:
-            chunk.metadata.update(doc.metadata)
-        
+            chunk.metadata.update(document.metadata)
+
         all_chunks.extend(chunks)
-    
-    print(f"✂️ Toplam {len(all_chunks)} chunk oluşturuldu")
+
     return all_chunks
 
 
-def build_index(repo_url: str, index_dir: str = "faiss_index") -> FAISS:
-    """
-    Tam pipeline:
-    GitHub URL → clone → dosyaları oku → chunk → embed → FAISS'e kaydet
-    
-    Bu fonksiyonu API endpoint'inden çağıracağız.
-    """
-    # 1. Repoyu indir
-    repo_dir = clone_repo(repo_url)
-    
-    # 2. Dosyaları oku
-    documents = load_code_files(repo_dir)
-    
+def build_index(
+    repo_url: str,
+    repo_dir: str | Path = "indexed_repo",
+    index_dir: str | Path = "faiss_index",
+) -> IndexResult:
+    """Build a FAISS index from a public GitHub repository."""
+    repo_path = clone_repo(repo_url, repo_dir)
+    documents = load_code_files(repo_path)
+
     if not documents:
-        raise ValueError("Hiç kod dosyası bulunamadı!")
-    
-    # 3. Chunk'la
+        raise ValueError("No supported code or Markdown files were found")
+
     chunks = chunk_code(documents)
-    
-    # 4. Embed et ve FAISS'e kaydet
-    print("🔄 Embedding başlıyor...")
-    vectorstore = FAISS.from_documents(chunks, embeddings)
-    vectorstore.save_local(index_dir)
-    print(f"✅ Index oluşturuldu: {index_dir}")
-    
-    return vectorstore
+
+    vectorstore = FAISS.from_documents(chunks, get_embeddings())
+    Path(index_dir).mkdir(parents=True, exist_ok=True)
+    vectorstore.save_local(str(index_dir))
+
+    return IndexResult(
+        vectorstore=vectorstore,
+        repo_path=repo_path,
+        index_path=Path(index_dir),
+        documents_count=len(documents),
+        chunks_count=len(chunks),
+    )
 
 
-def load_index(index_dir: str = "faiss_index") -> FAISS:
-    """
-    Kaydedilmiş FAISS index'i yükle.
-    Her soruda tekrar embedding yapma — hem yavaş hem paralı.
+def load_index(index_dir: str | Path = "faiss_index") -> FAISS:
+    """Load a persisted FAISS index.
+
+    FAISS uses pickle-based metadata serialization. Only load indexes created
+    by this application from trusted local paths.
     """
     return FAISS.load_local(
-        index_dir,
-        embeddings,
-        allow_dangerous_deserialization=True
+        str(index_dir),
+        get_embeddings(),
+        allow_dangerous_deserialization=True,
     )
