@@ -49,7 +49,7 @@ data/
 | --------------------- | ------------------------------ |
 | API                   | FastAPI, Uvicorn               |
 | Agent                 | LangChain tool-calling         |
-| LLM                   | Groq, Llama 3.3 70B            |
+| LLM                   | Groq, `openai/gpt-oss-120b`    |
 | Embeddings            | HuggingFace `all-MiniLM-L6-v2` |
 | Vector Store          | FAISS                          |
 | Repository Access     | GitPython                      |

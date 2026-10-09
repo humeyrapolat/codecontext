@@ -141,7 +141,7 @@ def build_agent(
     repo_id: str = "default",
 ) -> AgentRuntime:
     llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model="openai/gpt-oss-120b",
         temperature=0,
     )
     tools = build_tools(vectorstore, Path(repo_path))
@@ -205,7 +205,7 @@ def ask_agent(agent_runtime: AgentRuntime, question: str, session_id: str = "def
     except Exception as exc:
         print(f"Tool-calling failed; using retrieval fallback: {exc}")
 
-        plain_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+        plain_llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0)
         context = tool_map["search_code"].invoke({"query": question})
         fallback_messages = [
             SystemMessage(

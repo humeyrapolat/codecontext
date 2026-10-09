@@ -43,7 +43,7 @@ TEST_QUESTIONS = [
     },
     {
         "question": "Which LLM provider powers the agent's answers?",
-        "ground_truth": "Groq-hosted Llama 3.3 70B.",
+        "ground_truth": "Groq-hosted openai/gpt-oss-120b.",
     },
     {
         "question": "What is repo_id used for?",
@@ -141,7 +141,7 @@ TEST_QUESTIONS = [
     {
         "question": "Which LLM is used as the RAGAS judge model?",
         "ground_truth": (
-            "The same Groq-hosted llama-3.1-8b-instant model that generates "
+            "The same Groq-hosted openai/gpt-oss-20b model that generates "
             "the evaluation answers."
         ),
     },
@@ -221,7 +221,7 @@ def safe_float(value: Any) -> float:
 
 def generate_answer_from_context(question: str, context_text: str) -> str:
     llm = ChatGroq(
-        model="llama-3.1-8b-instant",
+        model="openai/gpt-oss-20b",
         temperature=0,
         max_tokens=512,
     )
@@ -281,7 +281,7 @@ def run_evaluation(agent_runtime: AgentRuntime) -> dict[str, float | str | int]:
 
     ragas_llm = LangchainLLMWrapper(
         ChatGroq(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             temperature=0,
         )
     )
