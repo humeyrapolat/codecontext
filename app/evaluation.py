@@ -259,8 +259,12 @@ def build_evaluation_dataset(agent_runtime: AgentRuntime) -> Dataset:
 
         if index > 0:
             # Space out requests to stay under Groq's free-tier
-            # tokens-per-minute limit instead of bursting through it.
-            time.sleep(2)
+            # tokens-per-minute limit (8000 TPM on openai/gpt-oss-20b as of
+            # 2026-10) instead of bursting through it. Each call here runs
+            # roughly 1300-1500 tokens (context + question + up to 512
+            # completion tokens), so ~5/minute is the realistic sustainable
+            # rate -> space calls by 12s, not a token-blind guess.
+            time.sleep(12)
 
         try:
             answer = generate_answer_from_context(question, context_text)
