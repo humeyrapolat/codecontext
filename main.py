@@ -1,5 +1,6 @@
 def main():
-    print("Hello from codecontext!")
+    print("CodeContext API")
+    print("Run with: uvicorn app.api:app --reload")
 
 
 if __name__ == "__main__":

@@ -1,17 +1,22 @@
 # Python-generated files
 __pycache__/
 *.py[oc]
+*.pyc
+*.pyo
+*.egg-info/
 build/
 dist/
 wheels/
-*.egg-info
-.env
+
+# Virtual environments and local secrets
 .venv/
-__pycache__/
+.env
+
+# Runtime artifacts
+data/
 faiss_index/
 indexed_repo/
-*.pyc
-*.pyo
-.DS_Store
-# Virtual environments
+evaluation_results.json
 
+# OS/editor files
+.DS_Store

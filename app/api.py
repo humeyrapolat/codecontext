@@ -1,21 +1,20 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
-from app.indexer import build_index, load_index
-from app.agent import build_agent, ask_agent
-from app.evaluation import run_evaluation
-import os
 from dotenv import load_dotenv
+
+from app.agent import ask_agent, build_agent, clear_session as clear_agent_session
+from app.indexer import build_index
+from app.repository import build_repository_paths, parse_github_repo_url
+from app.state import RepositoryRuntime, app_state
 
 load_dotenv()
 
 app = FastAPI(
     title="CodeContext API",
     description="AI-powered codebase assistant",
-    version="1.0.0"
+    version="1.0.0",
 )
-
-agent_tuple = None
 
 
 class IndexRequest(BaseModel):
@@ -25,78 +24,39 @@ class IndexRequest(BaseModel):
 class IndexResponse(BaseModel):
     message: str
     repo_url: str
+    repo_id: str
+    documents_count: int
+    chunks_count: int
 
 
 class QuestionRequest(BaseModel):
     question: str
-    session_id: str = "default"  # opsiyonel, default "default"
+    session_id: str = "default"
+    repo_id: str | None = None
 
 
 class QuestionResponse(BaseModel):
     question: str
     answer: str
     session_id: str
+    repo_id: str
 
 
 class ClearSessionRequest(BaseModel):
     session_id: str = "default"
-
-@app.get("/")
-async def root():
-    return {"status": "CodeContext API çalışıyor 🚀"}
+    repo_id: str | None = None
 
 
-@app.post("/index", response_model=IndexResponse)
-async def index_repository(request: IndexRequest):
-    global agent_tuple
-    
-    if not request.repo_url.startswith("https://github.com"):
-        raise HTTPException(
-            status_code=400,
-            detail="Sadece GitHub URL'leri kabul edilir"
-        )
-    
-    print(f"🔄 Repo indexleniyor: {request.repo_url}")
-    vectorstore = build_index(request.repo_url)
-    agent_tuple = build_agent(vectorstore)
-    print("✅ Agent hazır!")
-    
-    return IndexResponse(
-        message="Repo başarıyla indexlendi!",
-        repo_url=request.repo_url
-    )
+class RepositorySummary(BaseModel):
+    repo_id: str
+    repo_url: str
 
 
-@app.post("/ask", response_model=QuestionResponse)
-async def ask(request: QuestionRequest):
-    global agent_tuple
-    
-    if agent_tuple is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Önce /index endpoint'i ile bir repo indexleyin"
-        )
-    
-    if not request.question.strip():
-        raise HTTPException(
-            status_code=400,
-            detail="Soru boş olamaz"
-        )
-    
-    result = ask_agent(agent_tuple, request.question, request.session_id)
-    
-    return QuestionResponse(
-        question=result["question"],
-        answer=result["answer"],
-        session_id=result["session_id"]
-    )
+class RepositoriesResponse(BaseModel):
+    repositories: list[RepositorySummary]
+    active_repo_id: str | None
 
-@app.post("/clear")
-async def clear_session(request: ClearSessionRequest):
-    """Konuşma geçmişini temizle"""
-    from app.agent import clear_session
-    clear_session(request.session_id)
-    return {"message": f"Session '{request.session_id}' temizlendi"}
+
 class EvaluationResponse(BaseModel):
     faithfulness: float
     answer_correctness: float
@@ -105,26 +65,142 @@ class EvaluationResponse(BaseModel):
     num_questions: int
 
 
-@app.post("/evaluate", response_model=EvaluationResponse)
-async def evaluate_system():
-    global agent_tuple
-    
-    if agent_tuple is None:
+@app.get("/")
+async def root() -> dict[str, str]:
+    return {"status": "CodeContext API is running"}
+
+
+def require_agent_or_404(repo_id: str | None = None) -> RepositoryRuntime:
+    try:
+        return app_state.require_repository(repo_id)
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail="Repository is not indexed yet",
+        ) from exc
+
+
+async def index_repository_request(request: IndexRequest) -> IndexResponse:
+    try:
+        repo_ref = parse_github_repo_url(request.repo_url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    repo_paths = build_repository_paths(repo_ref.repo_id)
+
+    index_result = await run_in_threadpool(
+        build_index,
+        repo_ref.normalized_url,
+        repo_paths.source_dir,
+        repo_paths.index_dir,
+    )
+
+    agent_runtime = build_agent(
+        index_result.vectorstore,
+        str(index_result.repo_path),
+        repo_id=repo_ref.repo_id,
+    )
+
+    app_state.set_repository(
+        repo_ref.repo_id,
+        repo_ref.normalized_url,
+        agent_runtime,
+    )
+
+    return IndexResponse(
+        message="Repository indexed successfully.",
+        repo_url=repo_ref.normalized_url,
+        repo_id=repo_ref.repo_id,
+        documents_count=index_result.documents_count,
+        chunks_count=index_result.chunks_count,
+    )
+
+
+@app.post("/repositories", response_model=IndexResponse)
+async def create_repository(request: IndexRequest) -> IndexResponse:
+    return await index_repository_request(request)
+
+
+@app.post("/index", response_model=IndexResponse)
+async def index_repository(request: IndexRequest) -> IndexResponse:
+    return await index_repository_request(request)
+
+
+@app.get("/repositories", response_model=RepositoriesResponse)
+async def list_repositories() -> RepositoriesResponse:
+    return RepositoriesResponse(
+        repositories=[
+            RepositorySummary(repo_id=repo.repo_id, repo_url=repo.repo_url)
+            for repo in app_state.list_repositories()
+        ],
+        active_repo_id=app_state.active_repo_id,
+    )
+
+
+def answer_question(question: str, session_id: str, repo_id: str | None = None) -> QuestionResponse:
+    repository = require_agent_or_404(repo_id)
+
+    if not question.strip():
         raise HTTPException(
             status_code=400,
-            detail="Önce /index endpoint'i ile bir repo indexleyin"
+            detail="Question cannot be empty",
         )
-    
-    print("🔄 RAGAS evaluation başlatılıyor...")
-    
-    # RAGAS sync kod — threadpool'da çalıştır
-    scores = await run_in_threadpool(run_evaluation, agent_tuple)
-    
+
+    result = ask_agent(
+        repository.agent_runtime,
+        question,
+        session_id,
+    )
+
+    return QuestionResponse(
+        question=result["question"],
+        answer=result["answer"],
+        session_id=result["session_id"],
+        repo_id=repository.repo_id,
+    )
+
+
+@app.post("/ask", response_model=QuestionResponse)
+async def ask(request: QuestionRequest) -> QuestionResponse:
+    return answer_question(
+        question=request.question,
+        session_id=request.session_id,
+        repo_id=request.repo_id,
+    )
+
+
+@app.post("/repositories/{repo_id}/ask", response_model=QuestionResponse)
+async def ask_repository(repo_id: str, request: QuestionRequest) -> QuestionResponse:
+    return answer_question(
+        question=request.question,
+        session_id=request.session_id,
+        repo_id=repo_id,
+    )
+
+
+@app.post("/clear")
+async def clear_session(request: ClearSessionRequest) -> dict[str, str]:
+    repository = require_agent_or_404(request.repo_id)
+    clear_agent_session(request.session_id, repo_id=repository.repo_id)
+
+    return {"message": f"Session '{request.session_id}' cleared"}
+
+
+@app.post("/evaluate", response_model=EvaluationResponse)
+async def evaluate_system(repo_id: str | None = None) -> EvaluationResponse:
+    repository = require_agent_or_404(repo_id)
+
+    from app.evaluation import run_evaluation
+
+    scores = await run_in_threadpool(run_evaluation, repository.agent_runtime)
+
     return EvaluationResponse(**scores)
 
+
 @app.get("/status")
-async def status():
+async def status() -> dict[str, str | int | bool | None]:
     return {
-        "agent_ready": agent_tuple is not None,
-        "index_exists": os.path.exists("faiss_index")
+        "agent_ready": app_state.agent_ready,
+        "active_repo_id": app_state.active_repo_id,
+        "indexed_repositories": len(app_state.repositories),
     }

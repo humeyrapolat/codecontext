@@ -1,200 +1,258 @@
-# 🤖 CodeContext — AI-Powered Codebase Assistant
+# CodeContext - AI Codebase Assistant
 
-An intelligent agent that indexes any GitHub repository and answers natural language questions about the codebase. Built with LangChain tool-use agents, FAISS vector store, and monitored with LangFuse.
+CodeContext is a FastAPI-based AI assistant that indexes public GitHub repositories and answers natural-language questions about the codebase. It combines repository cloning, language-aware chunking, local embeddings, FAISS retrieval, LangChain tool-calling, Groq-hosted LLMs, LangFuse tracing, and a small RAGAS evaluation entrypoint.
 
----
+The project started as a single-repository prototype and is being refactored toward a cleaner repo-scoped architecture suitable for portfolio review and production-oriented discussion.
 
-## 🏗️ Architecture
+## What It Does
 
+- Indexes public GitHub repositories.
+- Stores each indexed repository under a stable `repo_id`.
+- Builds a FAISS vector index from supported code and Markdown files.
+- Creates an agent runtime per repository.
+- Lets users ask questions against a specific indexed repository.
+- Keeps conversation memory scoped by repository and session.
+- Gives the agent tools for semantic code search, file listing, and file content lookup.
+- Keeps generated runtime artifacts out of Git.
+- Includes lightweight unit tests and GitHub Actions CI.
+
+## Architecture
+
+```text
+GitHub URL
+  -> URL validation and repo_id generation
+  -> repo-scoped storage paths
+  -> Git clone
+  -> file filtering
+  -> language-aware chunking
+  -> local embeddings
+  -> FAISS index
+  -> AgentRuntime per repository
+  -> FastAPI question endpoints
+  -> LangChain tool calls
+  -> Groq LLM answer
 ```
-GitHub Repo URL
-      ↓
-Indexer (clone → parse → chunk → embed → FAISS)
-      ↓
-Tool-Use Agent
-  ├── search_code   → semantic search in codebase
-  ├── list_files    → project structure overview
-  └── get_file_content → read specific files
-      ↓
-Groq LLM (Llama 3.3 70B) + Conversation Memory
-      ↓
-FastAPI REST API + LangFuse Observability
+
+Runtime storage is scoped by repository:
+
+```text
+data/
+  repositories/
+    {repo_id}/
+      source/
+      faiss/
 ```
 
----
+## Tech Stack
 
-## 🛠️ Tech Stack
+| Layer                 | Technology                     |
+| --------------------- | ------------------------------ |
+| API                   | FastAPI, Uvicorn               |
+| Agent                 | LangChain tool-calling         |
+| LLM                   | Groq, Llama 3.3 70B            |
+| Embeddings            | HuggingFace `all-MiniLM-L6-v2` |
+| Vector Store          | FAISS                          |
+| Repository Access     | GitPython                      |
+| Observability         | LangFuse callbacks             |
+| Evaluation            | RAGAS entrypoint               |
+| Dependency Management | uv                             |
+| Tests                 | Python `unittest`              |
+| CI                    | GitHub Actions                 |
 
-| Layer               | Technology                             |
-| ------------------- | -------------------------------------- |
-| **API**             | FastAPI + Uvicorn                      |
-| **Agent Framework** | LangChain Tool-Use Agent               |
-| **Embeddings**      | HuggingFace `all-MiniLM-L6-v2` (local) |
-| **Vector Store**    | FAISS                                  |
-| **LLM**             | Llama 3.3 70B via Groq API             |
-| **Observability**   | LangFuse                               |
-| **Code Parsing**    | GitPython + Language-aware chunking    |
-| **Evaluation**      | RAGAS (faithfulness metric)            |
+## Key Design Decisions
 
----
+**Repo-scoped state**
+The first prototype kept one active global agent. CodeContext now stores runtime state by `repo_id`, which prepares the system for multi-repository support and prevents the API layer from owning application state directly.
 
-## ✨ Features
+**AgentRuntime abstraction**
+Each agent owns its LLM-with-tools, tools, vectorstore, and repository path. This removes hidden global vectorstore state and makes it clear which index an agent is answering from.
 
-- 🔍 **Semantic code search** — finds relevant code by meaning, not just keywords
-- 🤖 **Tool-use agent** — decides which tool to use based on the question
-- 💬 **Conversation memory** — remembers previous questions in a session
-- 📊 **LLMOps observability** — every agent step traced in LangFuse
-- 🌐 **Multi-language support** — answers in the same language as the question
-- 📁 **Language-aware chunking** — respects function and class boundaries
+**Lazy model initialization**
+Embedding and text-splitting dependencies are loaded when indexing is needed, not during API import. This keeps startup lighter and avoids importing heavy ML dependencies before the application needs them.
 
----
+**Path safety for file tools**
+The file-content tool resolves requested paths against the repository root and rejects paths that escape the indexed repository.
 
-## 🚀 Getting Started
+**Honest evaluation**
+RAGAS support exists, but this README does not publish benchmark scores until they are generated from a reproducible evaluation run.
+
+## Getting Started
 
 ### Prerequisites
 
 - Python 3.11+
 - [uv](https://github.com/astral-sh/uv)
-- Groq API key → [console.groq.com](https://console.groq.com)
-- LangFuse account → [cloud.langfuse.com](https://cloud.langfuse.com)
+- Groq API key
+- Optional LangFuse credentials for tracing
 
-### Installation
+### Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/codecontext.git
+git clone https://github.com/humeyrapolat/codecontext.git
 cd codecontext
 
 uv sync
-
 cp .env.example .env
-# Fill in your API keys
+```
+
+Fill in `.env`:
+
+```text
+GROQ_API_KEY=your_groq_api_key_here
+LANGFUSE_PUBLIC_KEY=your_langfuse_public_key_here
+LANGFUSE_SECRET_KEY=your_langfuse_secret_key_here
+LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 ### Run
 
 ```bash
-uvicorn app.api:app --reload
+uv run uvicorn app.api:app --reload
 ```
 
-API: `http://localhost:8000`
-Swagger docs: `http://localhost:8000/docs`
+API docs:
 
----
+```text
+http://localhost:8000/docs
+```
 
-## 📡 API Endpoints
+## API Examples
 
-### `POST /index`
+### Index a Repository
 
-Index a GitHub repository.
+```http
+POST /repositories
+```
 
 ```json
 {
-  "repo_url": "https://github.com/username/repo"
+  "repo_url": "https://github.com/humeyrapolat/codecontext"
 }
 ```
 
-### `POST /ask`
-
-Ask a question about the indexed codebase.
+Response:
 
 ```json
 {
-  "question": "How does the authentication work?",
-  "session_id": "my-session"
+  "message": "Repository indexed successfully.",
+  "repo_url": "https://github.com/humeyrapolat/codecontext.git",
+  "repo_id": "humeyrapolat-codecontext-...",
+  "documents_count": 8,
+  "chunks_count": 24
 }
 ```
 
-**Response:**
+`POST /index` is kept as a backwards-compatible alias.
+
+### Ask a Repository-Scoped Question
+
+```http
+POST /repositories/{repo_id}/ask
+```
 
 ```json
 {
-  "question": "How does the authentication work?",
-  "answer": "Authentication is handled in app/auth.py...",
-  "session_id": "my-session"
+  "question": "How does repository indexing work?",
+  "session_id": "demo-session"
 }
 ```
 
-### `POST /clear`
+### Ask the Active Repository
 
-Clear conversation history for a session.
+```http
+POST /ask
+```
 
 ```json
 {
-  "session_id": "my-session"
+  "repo_id": "optional-repo-id",
+  "question": "Which files define the agent tools?",
+  "session_id": "demo-session"
 }
 ```
 
-### `POST /evaluate`
+If `repo_id` is omitted, CodeContext uses the most recently indexed repository.
 
-Run RAGAS evaluation on the indexed codebase.
+### List Indexed Repositories
 
-### `GET /status`
-
-Check if agent is ready.
-
----
-
-## 📁 Project Structure
-
+```http
+GET /repositories
 ```
+
+### Check Status
+
+```http
+GET /status
+```
+
+### Evaluate
+
+```http
+POST /evaluate?repo_id={repo_id}
+```
+
+Evaluation output is written to `evaluation_results.json`, which is ignored by Git.
+
+### Clear Conversation Memory
+
+```http
+POST /clear
+```
+
+```json
+{
+  "repo_id": "optional-repo-id",
+  "session_id": "demo-session"
+}
+```
+
+## Project Structure
+
+```text
 codecontext/
-├── app/
-│   ├── __init__.py
-│   ├── api.py          # FastAPI endpoints
-│   ├── agent.py        # Tool-use agent + conversation memory
-│   ├── indexer.py      # GitHub repo → FAISS index
-│   └── evaluation.py   # RAGAS evaluation pipeline
-├── .env.example
-├── pyproject.toml
-└── README.md
+  app/
+    api.py          # FastAPI routes and request/response models
+    agent.py        # AgentRuntime, tool factory, agent loop
+    indexer.py      # clone -> load -> chunk -> embed -> FAISS
+    repository.py   # GitHub URL validation, repo_id, storage paths
+    state.py        # in-memory repo runtime registry
+    evaluation.py   # RAGAS evaluation entrypoint
+  tests/
+    test_repository.py
+    test_state.py
+  .github/workflows/ci.yml
+  .env.example
+  pyproject.toml
+  uv.lock
 ```
 
----
+## Run Checks
 
-## 🔭 Observability
+```bash
+python3 -m unittest discover -s tests
+python3 -m compileall app tests main.py
+```
 
-Every query is fully traced in LangFuse:
+With dependencies installed:
 
-- Tool selection decisions
-- Each tool call input/output
-- LLM reasoning steps
-- Token usage and latency per step
+```bash
+uv run python -m unittest discover -s tests
+uv run python -m compileall app tests main.py
+```
 
----
+## Current Limitations
 
-## 💡 Key Technical Decisions
+- Runtime state is still in memory, so it is lost on process restart.
+- Indexing still happens inside the request lifecycle; a production system should move it to a background job.
+- Conversation memory is repo-scoped but not persisted.
+- Private GitHub repositories are not supported yet.
+- Retrieval quality needs a larger reproducible evaluation dataset before publishing metrics.
 
-**Language-aware chunking**
-Unlike naive character splitting, CodeContext uses `RecursiveCharacterTextSplitter.from_language()` which respects Python/Java/Kotlin syntax boundaries — preventing functions from being split mid-definition.
+## Next Improvements
 
-**Tool-use over RetrievalQA**
-The agent dynamically selects between `search_code`, `list_files`, and `get_file_content` based on question type. "What files exist?" routes to `list_files`; "How does X work?" routes to `search_code`.
-
-**Local embeddings**
-`all-MiniLM-L6-v2` runs entirely locally — no embedding API costs, no latency overhead for indexing.
-
-**Conversation memory**
-Session-based message history allows follow-up questions like "What parameters does it take?" after "What does build_rag_chain do?" without repeating context.
-
----
-
-## 🗺️ Roadmap
-
-- [ ] Docker deployment
-- [ ] Private GitHub repo support (token auth)
-- [ ] Streaming responses
-- [ ] Jetpack Compose mobile frontend
-- [ ] Multi-repo support
-
----
-
-## 📊 Evaluation
-
-Evaluated using RAGAS framework:
-
-| Metric           | Score |
-| ---------------- | ----- |
-| Faithfulness     | 0.85+ |
-| Answer Relevancy | 0.82  |
-
-_Faithfulness measures whether LLM answers are grounded in retrieved context — preventing hallucination._
+- Add background indexing jobs and job status endpoints.
+- Add persistent state with Redis or Postgres.
+- Add citation metadata with file paths and line ranges.
+- Add hybrid retrieval and reranking.
+- Add private repo support through GitHub token authentication.
+- Add streaming answers.
