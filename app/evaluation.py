@@ -1,5 +1,6 @@
 import json
 import math
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -12,6 +13,7 @@ from ragas import evaluate
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.llms import LangchainLLMWrapper
 from ragas.metrics import answer_correctness, context_precision, faithfulness
+from ragas.run_config import RunConfig
 
 from app.agent import AgentRuntime
 
@@ -224,6 +226,11 @@ def generate_answer_from_context(question: str, context_text: str) -> str:
         model="openai/gpt-oss-20b",
         temperature=0,
         max_tokens=512,
+        # Groq's free tier caps this model at a low tokens-per-minute budget.
+        # 30 sequential questions plus RAGAS's own ~90 scoring calls burn
+        # through that fast; let LangChain's built-in backoff ride out the
+        # 429s instead of failing each question outright.
+        max_retries=6,
     )
     messages = [
         SystemMessage(
@@ -245,10 +252,15 @@ def build_evaluation_dataset(agent_runtime: AgentRuntime) -> Dataset:
     contexts = []
     ground_truths = []
 
-    for test_case in TEST_QUESTIONS:
+    for index, test_case in enumerate(TEST_QUESTIONS):
         question = test_case["question"]
         context_list = get_contexts_for_question(agent_runtime, question)
         context_text = "\n\n".join(context_list)
+
+        if index > 0:
+            # Space out requests to stay under Groq's free-tier
+            # tokens-per-minute limit instead of bursting through it.
+            time.sleep(2)
 
         try:
             answer = generate_answer_from_context(question, context_text)
@@ -283,6 +295,7 @@ def run_evaluation(agent_runtime: AgentRuntime) -> dict[str, float | str | int]:
         ChatGroq(
             model="openai/gpt-oss-20b",
             temperature=0,
+            max_retries=6,
         )
     )
     ragas_embeddings = LangchainEmbeddingsWrapper(
@@ -298,6 +311,11 @@ def run_evaluation(agent_runtime: AgentRuntime) -> dict[str, float | str | int]:
         ],
         llm=ragas_llm,
         embeddings=ragas_embeddings,
+        # RAGAS defaults to 16 concurrent LLM calls, which instantly blows
+        # through Groq's free-tier tokens-per-minute budget. Run fully
+        # sequential instead, with generous retry/backoff — slower, but
+        # it actually finishes on a free account.
+        run_config=RunConfig(max_workers=1, max_retries=10, max_wait=60),
     )
 
     scores = {
