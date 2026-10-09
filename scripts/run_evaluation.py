@@ -12,11 +12,16 @@ First run clones+indexes https://github.com/humeyrapolat/codecontext into
 evaluation_results.json (also gitignored) and printed to stdout.
 """
 
-from dotenv import load_dotenv
+import sys
+from pathlib import Path
 
-from app.agent import build_agent
-from app.indexer import build_index
-from app.evaluation import run_evaluation
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from dotenv import load_dotenv  # noqa: E402
+
+from app.agent import build_agent  # noqa: E402
+from app.indexer import build_index  # noqa: E402
+from app.evaluation import run_evaluation  # noqa: E402
 
 REPO_URL = "https://github.com/humeyrapolat/codecontext.git"
 
