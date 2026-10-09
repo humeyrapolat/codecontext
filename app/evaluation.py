@@ -34,6 +34,174 @@ TEST_QUESTIONS = [
         "question": "What is the API framework used?",
         "ground_truth": "FastAPI is used as the API framework.",
     },
+    {
+        "question": "What embedding model does CodeContext use?",
+        "ground_truth": (
+            "A local HuggingFace embedding model, all-MiniLM-L6-v2, "
+            "loaded lazily so API startup stays lightweight."
+        ),
+    },
+    {
+        "question": "Which LLM provider powers the agent's answers?",
+        "ground_truth": "Groq-hosted Llama 3.3 70B.",
+    },
+    {
+        "question": "What is repo_id used for?",
+        "ground_truth": (
+            "A stable per-repository identifier used to scope storage paths "
+            "and runtime state, so multiple repositories can be indexed and "
+            "queried independently."
+        ),
+    },
+    {
+        "question": "How is repo_id generated from a GitHub URL?",
+        "ground_truth": (
+            "parse_github_repo_url normalizes the URL, builds a slug from the "
+            "owner and repo name, and appends an 8-character sha1 hash of the "
+            "normalized URL to produce the repo_id."
+        ),
+    },
+    {
+        "question": "What happens if a non-GitHub URL is passed to parse_github_repo_url?",
+        "ground_truth": (
+            "It raises a ValueError, because only https://github.com/{owner}/{repo} "
+            "URLs are supported."
+        ),
+    },
+    {
+        "question": "What does resolve_repo_file protect against?",
+        "ground_truth": (
+            "Path traversal: it resolves a requested file path against the "
+            "repository root and raises a ValueError if the resolved path "
+            "escapes that root."
+        ),
+    },
+    {
+        "question": "Which function builds the per-repository storage paths?",
+        "ground_truth": (
+            "build_repository_paths, which returns a RepositoryPaths with a "
+            "source_dir and index_dir under data/repositories/{repo_id}."
+        ),
+    },
+    {
+        "question": "What tools does the agent have access to?",
+        "ground_truth": (
+            "search_code for semantic search over the FAISS index, list_files "
+            "to list repository files, and get_file_content to read a specific "
+            "file's contents."
+        ),
+    },
+    {
+        "question": "Which file defines the agent's tools?",
+        "ground_truth": "app/agent.py, in the build_tools function.",
+    },
+    {
+        "question": "What file extensions does the indexer support?",
+        "ground_truth": ".py, .js, .ts, .java, .kt, and .md files.",
+    },
+    {
+        "question": "Which directories does the indexer ignore while walking a repository?",
+        "ground_truth": (
+            "node_modules, __pycache__, and .venv, along with any hidden "
+            "(dot-prefixed) path segment."
+        ),
+    },
+    {
+        "question": "What splitter does the indexer use for source code files?",
+        "ground_truth": (
+            "A language-aware RecursiveCharacterTextSplitter built with "
+            "from_language for Python, JS, Java, and Kotlin, using a chunk "
+            "size of 1000 and chunk overlap of 100; other files use the "
+            "generic RecursiveCharacterTextSplitter with the same settings."
+        ),
+    },
+    {
+        "question": "How large can a single file be before the indexer skips it?",
+        "ground_truth": "Files larger than 100,000 characters (MAX_FILE_SIZE_CHARS) are skipped.",
+    },
+    {
+        "question": "What does app/state.py do?",
+        "ground_truth": (
+            "It keeps an in-memory registry of RepositoryRuntime objects keyed "
+            "by repo_id, tracks which repository is active, and raises when a "
+            "requested repository hasn't been indexed yet."
+        ),
+    },
+    {
+        "question": "Why was repo-scoped state introduced instead of one global agent?",
+        "ground_truth": (
+            "To support multiple indexed repositories at once and to stop the "
+            "API layer from owning application state directly."
+        ),
+    },
+    {
+        "question": "What does the evaluation module measure?",
+        "ground_truth": "Faithfulness, answer correctness, and context precision, using RAGAS.",
+    },
+    {
+        "question": "Which LLM is used as the RAGAS judge model?",
+        "ground_truth": (
+            "The same Groq-hosted llama-3.1-8b-instant model that generates "
+            "the evaluation answers."
+        ),
+    },
+    {
+        "question": "Where are evaluation results written?",
+        "ground_truth": "To evaluation_results.json, which is ignored by Git.",
+    },
+    {
+        "question": "Is CodeContext's FAISS index persisted across process restarts?",
+        "ground_truth": (
+            "The FAISS index itself is saved to a local index directory, but "
+            "the in-memory app_state runtime registry is not, so after a "
+            "restart the index must be reloaded and the agent runtime rebuilt."
+        ),
+    },
+    {
+        "question": "Can CodeContext index a private GitHub repository?",
+        "ground_truth": "No, private repository support is listed as not implemented yet.",
+    },
+    {
+        "question": "Which HTTP method and path index a new repository?",
+        "ground_truth": "POST /repositories (POST /index is kept as a backward-compatible alias).",
+    },
+    {
+        "question": "What does GET /status return?",
+        "ground_truth": (
+            "Whether the agent is ready, the active repo_id, and how many "
+            "repositories are currently indexed."
+        ),
+    },
+    {
+        "question": "How is conversation memory scoped?",
+        "ground_truth": (
+            "Per repository and per session, using a session key that "
+            "combines repo_id and session_id."
+        ),
+    },
+    {
+        "question": "What happens when /ask is called without a repo_id?",
+        "ground_truth": "CodeContext falls back to the most recently indexed (active) repository.",
+    },
+    {
+        "question": "What testing framework does the project use?",
+        "ground_truth": "Python's built-in unittest, run via unittest discover.",
+    },
+    {
+        "question": "Does the CI pipeline run the test suite?",
+        "ground_truth": (
+            "Yes, the GitHub Actions workflow installs dependencies, compiles "
+            "the app, and runs the unit test suite on every push and pull "
+            "request."
+        ),
+    },
+    {
+        "question": "What is the main known limitation around evaluation?",
+        "ground_truth": (
+            "The evaluation set is small, so retrieval quality needs a larger, "
+            "reproducible dataset before publishing headline metrics."
+        ),
+    },
 ]
 
 
